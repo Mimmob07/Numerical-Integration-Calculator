@@ -1,0 +1,9 @@
+[package]
+name = "numerical-integration"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+crossterm = "0.28.1"
+meval = "0.2.0"
+ratatui = "0.29.0"
