@@ -29,6 +29,7 @@ struct App<'a> {
     function_text: String,
     expression: Expr,
     data: Vec<(f64, f64)>,
+    limits_indexs: (Option<usize>, Option<usize>),
     dx: f64,
     // <Lower, Upper>
     bounds_text: Vec<String>,
@@ -66,15 +67,14 @@ enum Settings {
     MaximumY,
 }
 
-// TODO: fix area calculation functino
-// TODO: add a popup for settings (maxs, mins, limits, colors?)
 impl App<'_> {
     fn new() -> Self {
         Self {
             function_text: "x".to_string(),
             expression: "x".parse().unwrap(),
             data: Vec::new(),
-            dx: 0.1,
+            limits_indexs: (None, None),
+            dx: 0.001,
             bounds_text: vec!["0".to_string(); 2],
             bounds: [0.0; 2],
             upper_bound_line: Vec::new(),
@@ -95,26 +95,24 @@ impl App<'_> {
 
     fn populate_data(&mut self) {
         self.data.clear();
+        self.limits_indexs = (None, None);
         let function = self.expression.clone().bind("x").unwrap();
-        // let mut max_y = 0f64;
-        // let mut min_y = 0f64;
         let mut x = self.window_x[0];
+        let mut i = 0;
 
         while x < self.window_x[1] {
             let y = function(x);
 
-            // match y {
-            //     y if y > max_y => max_y = y,
-            //     y if y < min_y => min_y = y,
-            //     _ => {}
-            // }
+            if self.limits_indexs.0.is_none() && x >= self.bounds[0] {
+                self.limits_indexs.0 = Some(i);
+            } else if self.limits_indexs.1.is_none() && x >= self.bounds[1] {
+                self.limits_indexs.1 = Some(i);
+            }
 
             self.data.push((x, y));
             x += self.dx;
+            i += 1;
         }
-
-        // self.window_y[0] = min_y.floor();
-        // self.window_y[1] = max_y.ceil();
 
         self.populate_upper_bound_line();
         self.populate_lower_bound_line();
@@ -167,31 +165,16 @@ impl App<'_> {
         }
     }
 
-    // Seriously flawed, does not work
     fn calculate_area(&mut self) {
         self.area = 0.0;
 
-        self.area = self
-            .data
+        self.area = self.data[self.limits_indexs.0.unwrap()..self.limits_indexs.1.unwrap()]
             .windows(2)
             .map(|window| {
                 let ((_, y1), (_, y2)) = (window[0], window[1]);
                 self.dx * (y2 + y1) / 2.0
             })
             .sum::<f64>();
-        // for window in self.data.windows(2) {
-        //     if let [(_, y1), (_, y2)] = window {
-        //         let sub_area = ((y1 + y2) / 2.0) * self.dx;
-        //         self.area += sub_area;
-        //         // match y1 {
-        //         //     y if y > &0.0 => self.area += sub_area,
-        //         //     y if y < &0.0 => self.area -= sub_area,
-        //         //     &_ => {}
-        //         // }
-        //     }
-        // }
-
-        // self.area = self.area.round();
     }
 
     fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
@@ -223,7 +206,7 @@ impl App<'_> {
         ))
         .block(title_block);
 
-        let area_footer = Paragraph::new(Line::from(self.area.to_string()))
+        let area_footer = Paragraph::new(Line::from(format!("{:.4}", self.area)))
             .block(Block::default().title("Area").borders(Borders::ALL));
 
         self.draw_chart(frame, chunks[1]);
