@@ -27,8 +27,9 @@ const SETTINGS_LAYOUT: [[Settings; 4]; 2] = [
 
 struct App<'a> {
     function_text: String,
-    expression: Expr,
+    function: Box<dyn Fn(f64) -> f64>,
     data: Vec<(f64, f64)>,
+    data_to_draw_indexes: (Option<usize>, Option<usize>),
     limits_indexs: (Option<usize>, Option<usize>),
     dx: f64,
     // <Lower, Upper>
@@ -54,6 +55,7 @@ struct App<'a> {
 enum CurrentScreen {
     Main,
     Settings,
+    Error(String),
 }
 
 enum Settings {
@@ -71,8 +73,9 @@ impl App<'_> {
     fn new() -> Self {
         Self {
             function_text: "x".to_string(),
-            expression: "x".parse().unwrap(),
+            function: Box::new("x".parse::<Expr>().unwrap().bind("x").unwrap()),
             data: Vec::new(),
+            data_to_draw_indexes: (None, None),
             limits_indexs: (None, None),
             dx: 0.001,
             bounds_text: vec!["0".to_string(); 2],
@@ -95,13 +98,19 @@ impl App<'_> {
 
     fn populate_data(&mut self) {
         self.data.clear();
+        self.data_to_draw_indexes = (None, None);
         self.limits_indexs = (None, None);
-        let function = self.expression.clone().bind("x").unwrap();
-        let mut x = self.window_x[0];
+        let mut x = self.window_x[0].min(self.bounds[0]);
         let mut i = 0;
 
-        while x < self.window_x[1] {
-            let y = function(x);
+        while x <= self.window_x[1].max(self.bounds[1]) {
+            let y = (self.function)(x);
+
+            if self.data_to_draw_indexes.0.is_none() && x >= self.window_x[0] {
+                self.data_to_draw_indexes.0 = Some(i);
+            } else if self.data_to_draw_indexes.1.is_none() && x >= self.window_x[1] {
+                self.data_to_draw_indexes.1 = Some(i);
+            }
 
             if self.limits_indexs.0.is_none() && x >= self.bounds[0] {
                 self.limits_indexs.0 = Some(i);
@@ -126,12 +135,11 @@ impl App<'_> {
 
         // Set x to the upper bound
         let x = self.bounds[1];
-        let function = self.expression.clone().bind("x").unwrap();
-        let height = function(x);
-        let mut y = self.window_y[0];
-        let step = (y - height).abs() / 100.0;
+        let height = (self.function)(x);
+        let mut y = 0f64;
+        let step = height / 100.0;
 
-        while y < height {
+        while (y < height && y >= 0.0) || (y > height && y <= 0.0) {
             self.upper_bound_line.push((x, y));
             y += step;
         }
@@ -142,12 +150,11 @@ impl App<'_> {
 
         // Set x to lower bound
         let x = self.bounds[0];
-        let function = self.expression.clone().bind("x").unwrap();
-        let height = function(x);
-        let mut y = self.window_y[0];
-        let step = (y - height).abs() / 100.0;
+        let height = (self.function)(x);
+        let mut y = 0f64;
+        let step = height / 100.0;
 
-        while y < height {
+        while (y < height && y >= 0.0) || (y > height && y <= 0.0) {
             self.lower_bound_line.push((x, y));
             y += step;
         }
@@ -214,8 +221,14 @@ impl App<'_> {
         frame.render_widget(title, chunks[0]);
         frame.render_widget(area_footer, chunks[2]);
 
-        if self.active_screen == CurrentScreen::Settings {
-            self.draw_settings_popup(frame, self.popup_area(frame.area(), 80, 25));
+        match &self.active_screen {
+            CurrentScreen::Main => {}
+            CurrentScreen::Settings => {
+                self.draw_settings_popup(frame, self.popup_area(frame.area(), 80, 25))
+            }
+            CurrentScreen::Error(err) => {
+                self.draw_error_popup(frame, err, self.popup_area(frame.area(), 80, 25))
+            }
         }
     }
 
@@ -344,6 +357,23 @@ impl App<'_> {
         frame.render_widget(max_y_block, bottom_horizontal_chunks[3]);
     }
 
+    fn draw_error_popup(&self, frame: &mut Frame, error: &String, area: Rect) {
+        let error_block = Paragraph::new(Line::from(Span::styled(
+            error,
+            Style::default().fg(Color::Black),
+        )))
+        .block(
+            Block::default()
+                .title("Error!")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Black))
+                .bg(Color::Red),
+        );
+
+        frame.render_widget(Clear, area);
+        frame.render_widget(error_block, area);
+    }
+
     fn popup_area(&self, area: Rect, percent_x: u16, percent_y: u16) -> Rect {
         let vertical = Layout::vertical([Constraint::Percentage(percent_y)]).flex(Flex::Center);
         let horizontal = Layout::horizontal([Constraint::Percentage(percent_x)]).flex(Flex::Center);
@@ -451,32 +481,65 @@ impl App<'_> {
                 },
                 KeyCode::Enter => match self.settings_focus {
                     Settings::Function => {
-                        self.expression = self.function_text.parse().unwrap();
+                        match self.function_text.parse::<Expr>() {
+                            Ok(val) => match val.bind("x") {
+                                Ok(func) => self.function = Box::new(func),
+                                Err(err) => {
+                                    self.active_screen = CurrentScreen::Error(err.to_string())
+                                }
+                            },
+                            Err(err) => self.active_screen = CurrentScreen::Error(err.to_string()),
+                        }
+
                         self.populate_data();
                     }
                     Settings::LowerBound => {
-                        self.bounds[0] = self.bounds_text[0].parse::<f64>().unwrap();
+                        match self.bounds_text[0].parse::<f64>() {
+                            Ok(val) => self.bounds[0] = val,
+                            Err(err) => self.active_screen = CurrentScreen::Error(err.to_string()),
+                        }
+
                         self.populate_data();
                     }
                     Settings::UpperBound => {
-                        self.bounds[1] = self.bounds_text[1].parse::<f64>().unwrap();
+                        match self.bounds_text[1].parse::<f64>() {
+                            Ok(val) => self.bounds[1] = val,
+                            Err(err) => self.active_screen = CurrentScreen::Error(err.to_string()),
+                        }
+
                         self.populate_data();
                     }
-                    Settings::RecalculateArea => self.calculate_area(),
+                    Settings::RecalculateArea => self.populate_data(),
                     Settings::MinimumX => {
-                        self.window_x[0] = self.window_x_text[0].parse().unwrap();
+                        match self.window_x_text[0].parse() {
+                            Ok(val) => self.window_x[0] = val,
+                            Err(err) => self.active_screen = CurrentScreen::Error(err.to_string()),
+                        }
+
                         self.populate_data();
                     }
                     Settings::MaximumX => {
-                        self.window_x[1] = self.window_x_text[1].parse().unwrap();
+                        match self.window_x_text[1].parse() {
+                            Ok(val) => self.window_x[1] = val,
+                            Err(err) => self.active_screen = CurrentScreen::Error(err.to_string()),
+                        }
+
                         self.populate_data();
                     }
                     Settings::MinimumY => {
-                        self.window_y[0] = self.window_y_text[0].parse().unwrap();
+                        match self.window_y_text[0].parse() {
+                            Ok(val) => self.window_y[0] = val,
+                            Err(err) => self.active_screen = CurrentScreen::Error(err.to_string()),
+                        }
+
                         self.populate_data();
                     }
                     Settings::MaximumY => {
-                        self.window_y[1] = self.window_y_text[1].parse().unwrap();
+                        match self.window_y_text[1].parse() {
+                            Ok(val) => self.window_y[1] = val,
+                            Err(err) => self.active_screen = CurrentScreen::Error(err.to_string()),
+                        }
+
                         self.populate_data();
                     }
                 },
@@ -519,11 +582,11 @@ impl App<'_> {
                 KeyCode::Esc => match self.active_screen {
                     CurrentScreen::Main => self.exit(),
                     CurrentScreen::Settings => self.active_screen = CurrentScreen::Main,
+                    CurrentScreen::Error(_) => self.active_screen = CurrentScreen::Settings,
                 },
                 KeyCode::Tab => {
-                    self.active_screen = match self.active_screen {
-                        CurrentScreen::Main => CurrentScreen::Settings,
-                        CurrentScreen::Settings => CurrentScreen::Settings,
+                    if self.active_screen == CurrentScreen::Main {
+                        self.active_screen = CurrentScreen::Settings
                     }
                 }
                 _ => {}
