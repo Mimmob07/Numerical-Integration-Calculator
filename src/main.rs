@@ -103,7 +103,7 @@ impl App<'_> {
         let mut x = self.window_x[0].min(self.bounds[0]);
         let mut i = 0;
 
-        while x <= self.window_x[1].max(self.bounds[1]) {
+        while x <= self.window_x[1].max(self.bounds[1]) + self.dx {
             let y = (self.function)(x);
 
             if self.data_to_draw_indexes.0.is_none() && x >= self.window_x[0] {
